@@ -1,7 +1,7 @@
 Unity MasterServer written in NodeJS
 =================
 
-This program is an alternative to the Unity MasterServer functionality. It includes a working UnregisterHost function :).
+This program is an alternative to the Unity MasterServer functionality. It includes a working UnregisterHost function :) and a policy server for webplayer applications.
 
 Dependencies:
 - NodeJS installation
