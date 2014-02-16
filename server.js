@@ -49,23 +49,26 @@ server.on('connection', onServerConnection);
 server.listen(port, host, onServerListen);
 
 // policyserver
-net.createServer(
-    function(socket)
-    {
-		// todo: configable policy from filesystem
-        socket.write("<?xml version=\"1.0\"?>");
-        socket.write("<cross-domain-policy>");
-        socket.write("<allow-access-from domain=\"*\" />");
-        socket.write("</cross-domain-policy>");
-        socket.end();
-    }
-).listen(843);
+if(policyPort > 0)
+{
+	net.createServer(
+		function(socket)
+		{
+			// todo: configable policy from filesystem
+			socket.write("<?xml version=\"1.0\"?>");
+			socket.write("<cross-domain-policy>");
+			socket.write("<allow-access-from domain=\"*\" />");
+			socket.write("</cross-domain-policy>");
+			socket.end();
+		}
+	).listen(policyPort);
+}
 
 function onServerListen()
 {
 	console.log('server started');
 	
-	setInterval(hostsCleanup, hostTimeoutCheck);
+	//setInterval(hostsCleanup, hostTimeoutCheck);
 }
 
 function onServerConnection(socket)
