@@ -23,7 +23,7 @@ var socketTimeout = 15000;	// 15 seconds
 var hostTimeout = 180000;	// 3 minutes
 var hostTimeoutCheck = 5000;	// 10 seconds
 
-var hostsFile = 'd:/Projekte/UrksMasterserver/hosts.nosql';
+var hostsFile = '';
 // </config>
 
 var net = require('net');
@@ -65,7 +65,7 @@ function onServerListen()
 {
 	console.log('server started');
 	
-	//setInterval(hostsCleanup, hostTimeoutCheck);
+	setInterval(hostsCleanup, hostTimeoutCheck);
 }
 
 function onServerConnection(socket)
