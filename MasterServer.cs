@@ -124,7 +124,7 @@ namespace Urks
 
 						break;
 					case ACTION_HOST_REGISTERED:	// registered
-                        byte[] tokenBuffer = new byte[16];
+						char[] tokenBuffer = new char[16];
 						streamReader.Read(tokenBuffer, 0, 16);
 						
 						char[] hostIdLengthBuffer = new char[1];
