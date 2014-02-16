@@ -21,7 +21,8 @@ Unity:
 - the interface is similar to the Unity MasterServer class (UnityEngine.MasterServer)
 
 ToDo:
-- security check
+- security check (buffer overflow ...)
 - implement NAT functionality
 - correct "isDedicated" handling
 - correct error handling
+- only use the byteStreamReader 
