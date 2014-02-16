@@ -13,7 +13,7 @@ Setup:
 
 Configuration:
 - open server.js and edit the parameters in <config> section
-- don't forget to set the hosts file parameter
+- don't forget to set the hosts file parameter (there the host data is persisted)
 - to disable the policy server set the policy port to 0 (please note: for webplayer applications the policy server is required see: https://docs.unity3d.com/Documentation/Manual/SecuritySandbox.html)
 
 Unity:
