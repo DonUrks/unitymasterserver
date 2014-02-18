@@ -14,15 +14,16 @@
 
 // <config>
 // listen on
-var port = 8000;
-var policyPort = 843;
-var host = "127.0.0.1"
+var port = 8000;		// port for masterserver
+var policyPort = 843;		// port for poilcy server (set 0 to disable)
+var host = "127.0.0.1";		// listen on address
 
 // timeouts in milliseconds 
-var socketTimeout = 15000;	// 15 seconds
-var hostTimeout = 180000;	// 3 minutes
-var hostTimeoutCheck = 5000;	// 10 seconds
+var socketTimeout = 15000;	// closes the socket after timeout
+var hostTimeout = 180000;	// remove the host from the database after timespan without any updates
+var hostTimeoutCheck = 10000;	// check intervall for timeout hosts
 
+// database file
 var hostsFile = '';
 // </config>
 
@@ -34,14 +35,14 @@ var tokenChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789
 var currentHostId = 0;
 
 // actions to server
-var ACTION_REGISTER_HOST = 'a';
-var ACTION_UNREGISTER_HOST = 'b';
-var ACTION_UPDATE_HOST = 'c';
-var ACTION_REQUEST_HOSTS = 'd';
+var ACTION_REGISTER_HOST = 1;
+var ACTION_UNREGISTER_HOST = 2;
+var ACTION_UPDATE_HOST = 3;
+var ACTION_REQUEST_HOSTS = 4;
 
 // actions to client
-var ACTION_HOST_REGISTERED = 'e';
-var ACTION_HOSTS = 'f';
+var ACTION_HOST_REGISTERED = 5;
+var ACTION_HOSTS = 6;
 
 // masterserver
 var server = net.createServer();
@@ -61,14 +62,13 @@ if(policyPort > 0)
 			socket.write("</cross-domain-policy>");
 			socket.end();
 		}
-	).listen(policyPort);
+	).listen(policyPort, host);
 }
 
 function onServerListen()
 {
 	console.log('server started');
-	
-	//setInterval(hostsCleanup, hostTimeoutCheck);
+	setInterval(hostsCleanup, hostTimeoutCheck);
 }
 
 function onServerConnection(socket)
@@ -119,6 +119,8 @@ function onSocketData(data)
 	console.log('incoming: ' + this.remoteAddress + ':' + this.remotePort);
 	console.log('data length: ' + data.length);
 	console.log('data: ' + data);
+	socketClose(this);
+	return;
 			
 	try
 	{
@@ -134,16 +136,16 @@ function onSocketData(data)
 	
 	switch(action)
 	{
-		case ACTION_REGISTER_HOST.charCodeAt(0):
+		case ACTION_REGISTER_HOST:
 			registerHost(this, actionBody);
 			break;
-		case ACTION_UNREGISTER_HOST.charCodeAt(0):
+		case ACTION_UNREGISTER_HOST:
 			unregisterHost(this, actionBody);
 			break;
-		case ACTION_UPDATE_HOST.charCodeAt(0):
+		case ACTION_UPDATE_HOST:
 			updateHost(this, actionBody);
 			break;
-		case ACTION_REQUEST_HOSTS.charCodeAt(0):
+		case ACTION_REQUEST_HOSTS:
 			requestHosts(this, actionBody);
 			break;
 		default: 		
@@ -158,21 +160,32 @@ function registerHost(socket, data)
 {
 	var gameName = "";
 	var port = "";
+	var useNat = false;
+	var playerGUID = "";
 
 	try
 	{
 		var offset = 0;
 	
-		var gameNameLength = data.readUInt8(0);
-		offset += 1;
+		// gameName
+		var gameNameLength = data.readUInt8(offset);				
+		gameName = data.toString("utf8", offset+1, offset+1+gameNameLength);
+		offset += 1 + gameNameLength;
 		
-		gameName = data.toString("utf8", offset, offset+gameNameLength);
-		offset += gameNameLength;
-		
+		// port
 		var portLength = data.readUInt8(offset);
+		port = data.toString("ascii", offset+1, offset+1+portLength);
+		offset += 1 + portLength;
+		
+		// useNat
+		var useNat = data.readUInt8(offset) > 0 ? true : false;
 		offset += 1;
 		
-		port = data.toString("ascii", offset, offset+portLength);
+		// playerGUID
+		var playerGUIDLength = data.readUInt8(offset);		
+		playerGUID = data.toString("ascii", offset+1, offset+1+playerGUIDLength);
+		offset += 1 + playerGUIDLength;
+		
 	}
 	catch(err)
 	{
@@ -198,6 +211,8 @@ function registerHost(socket, data)
 			"ready": false,
 			"address": socket.remoteAddressCopy,
 			"port": port,
+			"useNat": useNat,
+			"playerGUID": playerGUID,
 			"timestamp": new Date().getTime()
 		}
 	);
@@ -206,6 +221,9 @@ function registerHost(socket, data)
 	console.log("hostId: " + currentId);
 	console.log("token: " + token);
 	console.log("gameName: " + gameName);
+	console.log("port: " + port);
+	console.log("useNat: " + useNat);
+	console.log("playerGUID: " + playerGUID);
 	
 	var currentIdLength = Buffer.byteLength(currentId, "ascii");
 	
@@ -394,12 +412,12 @@ function requestHosts(socket, data)
 				{				
 					var offset = 0;
 				
-					var bufferSize = 1 + doc.address.length;
-					bufferSize += 1 + doc.port.length;
-					bufferSize += 1 + Buffer.byteLength(doc.name, "utf8");
-					bufferSize += 1;
-					bufferSize += 1;
-					bufferSize += 1;
+					var bufferSize = 1 + doc.address.length;	// addressLength + address
+					bufferSize += 1 + doc.port.length;	// portLength + port
+					bufferSize += 1 + Buffer.byteLength(doc.name, "utf8");	// nameLength + name
+					bufferSize += 1;	// passwordRequired
+					bufferSize += 1;	// playerCount
+					bufferSize += 1;	// playerLimit
 					
 					var documentBuffer = new Buffer(bufferSize);
 					
