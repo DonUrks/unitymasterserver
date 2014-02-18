@@ -23,10 +23,9 @@ namespace Urks
 		public bool dedicatedServer = false;
 		public string ipAddress = "";
 		public int port = 0;
-		public int updateRate = 60; 
+		public int updateRate = 60;
 		
 		private bool hostRegistered = false;
-		private bool hostUpdated = false;
 		
 		private TcpClient socket;
 		private Stream socketStream;
@@ -35,139 +34,161 @@ namespace Urks
 		private string token = "";
 		private string gameName = "";
 		private byte[] data;
-
+		
 		// actions to server
-		private const char ACTION_REGISTER_HOST = 'a';
-		private const char ACTION_UNREGISTER_HOST =  'b';
-		private const char ACTION_UPDATE_HOST = 'c';
-		private const char ACTION_REQUEST_HOSTS = 'd';
+		private const byte ACTION_REGISTER_HOST = 1;
+		private const byte ACTION_UNREGISTER_HOST = 2;
+		private const byte ACTION_UPDATE_HOST = 3;
+		private const byte ACTION_REQUEST_HOSTS = 4;
 		
 		// actions to client
-		private const byte ACTION_HOST_REGISTERED = (byte)'e';
-		private const byte ACTION_HOSTS = (byte)'f';
+		private const byte ACTION_HOST_REGISTERED = 5;
+		private const byte ACTION_HOSTS = 6;
 		
 		private List<UnityEngine.HostData> hostData = new List<UnityEngine.HostData>();
-
+		
 		private void Update()
 		{
-			if(null != this.socket && this.socket.Connected)
+			if (null != this.socket && this.socket.Connected)
 			{
-				if(0 < this.socket.Available)
+				if (0 < this.socket.Available)
 				{
-					StreamReader streamReader = new StreamReader(this.socketStream);
-                    Stream byteStreamReader = socketStream;
+					Urks.MasterServer ms = UnityEngine.GameObject.FindGameObjectWithTag("Urks.MasterServer").GetComponent<Urks.MasterServer>();
+					ms.RegisterHost("TheNextMinecraftClone", "Free for all!", true);
 					
-					byte[] actionBuffer = new byte[1];
-					byteStreamReader.Read(actionBuffer, 0, 1);
+					byte action = (byte)this.socketStream.ReadByte();
 					
-					switch(actionBuffer[0])
+					switch(action)
 					{
-					case ACTION_HOSTS:
-						// host count
-						byte[] hostCountBuffer = new byte[1];
-						byteStreamReader.Read(hostCountBuffer, 0, 1);
-						byte hostCount = hostCountBuffer[0];
+					case ACTION_HOST_REGISTERED:
+						// token
+						byte[] tokenBytes = new byte[16];
+						this.socketStream.Read(tokenBytes, 0, tokenBytes.Length);
 
-						for(int i=0; i<hostCount; i++)
-						{
-							// address
-							byte[] addressLengthBuffer = new byte[1];
-							byteStreamReader.Read(addressLengthBuffer, 0, 1);
-							byte[] addressBuffer = new byte[addressLengthBuffer[0]];
-							byteStreamReader.Read(addressBuffer, 0, addressLengthBuffer[0]);
-
-							// port
-							byte[] portLengthBuffer = new byte[1];
-							byteStreamReader.Read(portLengthBuffer, 0, 1);
-							byte[] portBuffer = new byte[portLengthBuffer[0]];
-							byteStreamReader.Read(portBuffer, 0, portLengthBuffer[0]);
-
-							// name
-							byte[] nameLengthBuffer = new byte[1];
-							byteStreamReader.Read(nameLengthBuffer, 0, 1);
-							byte[] nameBuffer = new byte[nameLengthBuffer[0]];
-							byteStreamReader.Read(nameBuffer, 0, nameLengthBuffer[0]);
-
-							// passwordRequired
-							byte[] passwordRequiredBuffer = new byte[1];
-							byteStreamReader.Read(passwordRequiredBuffer, 0, 1);
-
-							// playerCount
-							byte[] playerCountBuffer = new byte[1];
-							byteStreamReader.Read(playerCountBuffer, 0, 1);
-
-							// playerLimit
-							byte[] playerLimitBuffer = new byte[1];
-							byteStreamReader.Read(playerLimitBuffer, 0, 1);
-
-							string address = System.Text.Encoding.ASCII.GetString(addressBuffer);
-							string port = System.Text.Encoding.ASCII.GetString(portBuffer);
-							string name = System.Text.Encoding.UTF8.GetString(nameBuffer);
-									
-							bool passwordRequired = passwordRequiredBuffer[0] == 0 ? false : true;
-							int playerCount = (int) playerCountBuffer[0];
-							int playerLimit = (int) playerLimitBuffer[0];
-
-							UnityEngine.HostData hostData = new UnityEngine.HostData();
-							hostData.connectedPlayers = (int) playerCountBuffer[0];
-							hostData.playerLimit = playerLimit;
-							hostData.gameName = name;
-							hostData.ip = new string[1];
-							hostData.ip[0] = address;
-							hostData.port = int.Parse(port);
-							hostData.passwordProtected = passwordRequired; 
-
-							this.hostData.Add(hostData);
-
-							UnityEngine.Debug.Log(address + " " + port + " " + name + " " + passwordRequired + " " + playerCount + " " + playerLimit);
-						}
-
-						break;
-					case ACTION_HOST_REGISTERED:	// registered
-						char[] tokenBuffer = new char[16];
-						streamReader.Read(tokenBuffer, 0, 16);
+						// hostId
+						byte hostIdLength = (byte)this.socketStream.ReadByte();
+						byte[] hostIdBytes = new byte[hostIdLength];
+						this.socketStream.Read(hostIdBytes, 0, hostIdLength);
 						
-						char[] hostIdLengthBuffer = new char[1];
-						streamReader.Read(hostIdLengthBuffer, 0, 1);
-						
-						char[] hostIdBuffer = new char[hostIdLengthBuffer[0]];
-						streamReader.Read(hostIdBuffer, 0, hostIdLengthBuffer[0]);
-						
-						this.token = new string(tokenBuffer);
-						this.hostId = new string(hostIdBuffer);
+						this.token = System.Text.Encoding.ASCII.GetString(tokenBytes);
+						this.hostId = System.Text.Encoding.ASCII.GetString(hostIdBytes);
 						
 						this.hostRegistered = true;
 						StartCoroutine("UpdateHostData");
+						
+						UnityEngine.Debug.Log("Host registered on master server. (hostId: " + this.hostId + ")");
+						break;
 
-						UnityEngine.Debug.Log("Host registered on master server.");
+					case ACTION_HOSTS:
+						// host count
+						byte hostCount = (byte)this.socketStream.ReadByte();
+
+						UnityEngine.Debug.Log("Hosts: " + hostCount);
+
+						for(int i = 0; i < hostCount; i++)
+						{
+							// address
+							byte addressLength = (byte)this.socketStream.ReadByte();
+							byte[] adressBytes = new byte[addressLength];
+							this.socketStream.Read(adressBytes, 0, addressLength);
+
+							// port
+							byte portLength = (byte)this.socketStream.ReadByte();
+							byte[] portBytes = new byte[portLength];
+							this.socketStream.Read(portBytes, 0, portLength);
+
+							// name
+							byte nameLength = (byte)this.socketStream.ReadByte();
+							byte[] nameBytes = new byte[nameLength];
+							this.socketStream.Read(nameBytes, 0, nameLength);
+
+							// passwordRequired
+							byte passwordRequired = (byte)this.socketStream.ReadByte();
+
+							// playerCount
+							byte playerCount = (byte)this.socketStream.ReadByte();
+
+							// playerLimit
+							byte playerLimit = (byte)this.socketStream.ReadByte();
+
+							// useNat
+							byte useNat = (byte)this.socketStream.ReadByte();
+
+							// playerGUID
+							byte playerGUIDLength = (byte)this.socketStream.ReadByte();
+							byte[] playerGUIDBytes = new byte[playerGUIDLength];
+							this.socketStream.Read(playerGUIDBytes, 0, playerGUIDLength);
+
+							UnityEngine.HostData hostData = new UnityEngine.HostData();
+							hostData.ip = new string[1];
+							hostData.ip[0] = System.Text.ASCIIEncoding.ASCII.GetString(adressBytes);
+							hostData.port = int.Parse(System.Text.ASCIIEncoding.ASCII.GetString(portBytes));
+							hostData.gameName = System.Text.UTF8Encoding.UTF8.GetString(nameBytes);
+							hostData.passwordProtected = passwordRequired > 0 ? true : false;
+							hostData.connectedPlayers = playerCount;
+							hostData.playerLimit = playerLimit;
+							hostData.useNat = useNat > 0 ? true : false;
+							hostData.guid = System.Text.ASCIIEncoding.ASCII.GetString(playerGUIDBytes);
+
+							this.hostData.Add(hostData);
+						}
+
 						break;
 					default:
-						UnityEngine.Debug.Log("Unknown action from MasterServer: " + actionBuffer[0]);
+						UnityEngine.Debug.Log("Unknown action from MasterServer: " + action);
+						this.socketStream.Close();
 						break;
 					}
 				}
 			}
 		}
-		
-		public void RegisterHost(string gameTypeName, string gameName/*, byte[] data = null*/)
+
+		public void RegisterHost(string gameTypeName, string gameName, bool useNat, byte[] data)
 		{
-			if(!UnityEngine.Network.isServer)
+			this.data = data;
+			this.RegisterHost(gameTypeName, gameName, useNat);
+		}
+
+		public void RegisterHost(string gameTypeName, string gameName, bool useNat)
+		{
+			if (!UnityEngine.Network.isServer)
 			{
 				throw new UnityEngine.UnityException("It's not possible to register a host until it is running.");
 			}
-			
+
 			this.gameName = gameName;
-			//this.data = data;
+			
+			byte[] gameTypeNameBytes = System.Text.UTF8Encoding.UTF8.GetBytes(gameTypeName);
+			if (gameTypeNameBytes.Length <= 0 || gameTypeNameBytes.Length > 255)
+			{
+				throw new UnityEngine.UnityException("You must pass a GameTypeName 1-255 bytes.");
+			}
+			
+			byte[] portBytes = System.Text.ASCIIEncoding.ASCII.GetBytes(UnityEngine.Network.player.port.ToString());
+			byte[] playerGUIDBytes = System.Text.ASCIIEncoding.ASCII.GetBytes(UnityEngine.Network.player.guid);
+			
+			List<byte> bytes = new List<byte>();
+			
+			// action
+			bytes.Add(ACTION_REGISTER_HOST);
+			
+			// gameTypeName
+			bytes.Add((byte)gameTypeNameBytes.Length);
+			bytes.AddRange(gameTypeNameBytes);
+			
+			// port
+			bytes.Add((byte)portBytes.Length);
+			bytes.AddRange(portBytes);
+			
+			// useNat
+			bytes.Add((byte)(useNat == true ? 1 : 0));
+			
+			// player GUID
+			bytes.Add((byte)playerGUIDBytes.Length);
+			bytes.AddRange(playerGUIDBytes);
 			
 			this.RequireConnection();
-			
-			StreamWriter streamWriter = new StreamWriter(this.socketStream);
-			streamWriter.Write(ACTION_REGISTER_HOST);
-			streamWriter.Write((char)System.Text.UTF8Encoding.UTF8.GetByteCount(gameTypeName));
-			streamWriter.Write(System.Text.UTF8Encoding.UTF8.GetBytes(gameTypeName));
-			streamWriter.Write(UnityEngine.Network.player.port.ToString().Length);
-			streamWriter.Write(UnityEngine.Network.player.port.ToString());
-			streamWriter.Flush();
+			this.socketStream.Write(bytes.ToArray(), 0, bytes.Count);
 		}
 		
 		public void ClearHostList()
@@ -182,79 +203,113 @@ namespace Urks
 		
 		public void RequestHostList(string gameTypeName)
 		{
-			this.RequireConnection();
+			byte[] gameTypeNameBytes = System.Text.UTF8Encoding.UTF8.GetBytes(gameTypeName);
 
-			StreamWriter streamWriter = new StreamWriter(this.socketStream);
-			streamWriter.Write(ACTION_REQUEST_HOSTS);
-			streamWriter.Write((char)System.Text.UTF8Encoding.UTF8.GetByteCount(gameTypeName));
-			streamWriter.Write(gameTypeName);
-			streamWriter.Flush();
+			List<byte> bytes = new List<byte>();
+
+			// action
+			bytes.Add(ACTION_REQUEST_HOSTS);
+
+			// gameTypeName
+			bytes.Add((byte)gameTypeNameBytes.Length);
+			bytes.AddRange(gameTypeNameBytes);
+
+			this.RequireConnection();
+			this.socketStream.Write(bytes.ToArray(), 0, bytes.Count);
 		}
 		
 		public void UnregisterHost()
 		{
-			if(this.hostRegistered)
+			if (this.hostRegistered)
 			{
 				StopCoroutine("UpdateHostData");
 
+				byte[] hostIdBytes = System.Text.ASCIIEncoding.ASCII.GetBytes(this.hostId);
+				byte[] tokenBytes = System.Text.ASCIIEncoding.ASCII.GetBytes(this.token);
+
+				List<byte> bytes = new List<byte>();
+				
+				// action
+				bytes.Add(ACTION_UNREGISTER_HOST);
+
+				// hostId
+				bytes.Add((byte)hostIdBytes.Length);
+				bytes.AddRange(hostIdBytes);
+
+				// token
+				bytes.AddRange(tokenBytes);
+				
 				this.RequireConnection();
-				
-				StreamWriter streamWriter = new StreamWriter(this.socketStream);
-				streamWriter.Write(ACTION_UNREGISTER_HOST);
-				streamWriter.Write((char)this.hostId.Length);
-				streamWriter.Write(this.hostId);
-				streamWriter.Write(token);
-				streamWriter.Flush();
-				
-				this.token = "";
-				this.hostId = "";
-				this.gameName = "";
-				this.hostRegistered = false;
+				this.socketStream.Write(bytes.ToArray(), 0, bytes.Count);
 			}
 		}
 		
 		private void RequireConnection()
 		{
-			if(null == this.socket || !this.socket.Connected)
+			if (null == this.socket || !this.socket.Connected)
 			{
 				this.socket = new TcpClient(this.ipAddress, this.port);
+				this.socket.NoDelay = true;
 			}
 			this.socketStream = this.socket.GetStream();
 		}
 		
-		IEnumerator UpdateHostData()
+		private IEnumerator UpdateHostData()
 		{
-			while(true)
+			byte[] hostIdBytes = System.Text.ASCIIEncoding.ASCII.GetBytes(this.hostId);
+			byte[] tokenBytes = System.Text.ASCIIEncoding.ASCII.GetBytes(this.token);
+			byte[] gameNameBytes = System.Text.UTF8Encoding.UTF8.GetBytes(this.gameName);
+
+			while (true)
 			{
-				this.RequireConnection();
-				
-				char passwordRequired = UnityEngine.Network.incomingPassword != "" ? (char)1 : (char)0;
-				char maxConnections = (char)UnityEngine.Network.maxConnections;
-				
-				StreamWriter streamWriter = new StreamWriter(this.socketStream);
-				streamWriter.Write(ACTION_UPDATE_HOST);
-				streamWriter.Write((char)this.hostId.Length);
-				streamWriter.Write(this.hostId);
-				streamWriter.Write(token);
-				streamWriter.Write((char)System.Text.UTF8Encoding.UTF8.GetByteCount(gameName));
-				streamWriter.Write(this.gameName);
-				streamWriter.Write(passwordRequired);
-				streamWriter.Write((char)UnityEngine.Network.connections.Length);
-				streamWriter.Write(maxConnections);
-				
-				if(this.data != null)
+				byte passwordRequired = UnityEngine.Network.incomingPassword != "" ? (byte)1 : (byte)0;
+				byte playerCount = (byte)UnityEngine.Network.connections.Length;
+				if(!this.dedicatedServer)
 				{
-					streamWriter.Write((char)this.data.Length);
-					streamWriter.Write(this.data);
+					playerCount += 1;
+				}
+				byte playerLimit = (byte)UnityEngine.Network.maxConnections;
+
+				List<byte> bytes = new List<byte>();
+
+				// action
+				bytes.Add(ACTION_UPDATE_HOST);
+
+				// hostId
+				bytes.Add((byte)hostIdBytes.Length);
+				bytes.AddRange(hostIdBytes);
+				
+				// token
+				bytes.AddRange(tokenBytes);
+
+				// gameName
+				bytes.Add((byte)gameNameBytes.Length);
+				bytes.AddRange(gameNameBytes);
+
+				// passwordRequired
+				bytes.Add(passwordRequired);
+
+				// playerCount
+				bytes.Add(playerCount);
+
+				// playerLimit
+				bytes.Add(playerLimit);
+
+				// data
+				if (this.data != null)
+				{
+					bytes.Add((byte)this.data.Length);
+					bytes.AddRange(this.data);
 				}
 				else
 				{
-					streamWriter.Write((char)0);
+					bytes.Add(0);
 				}
+
+				this.RequireConnection();
+				this.socketStream.Write(bytes.ToArray(), 0, bytes.Count);
 				
-				streamWriter.Flush();
-				
-				yield return new UnityEngine.WaitForSeconds(this.updateRate);			
+				yield return new UnityEngine.WaitForSeconds(this.updateRate);
 			}
 		}
 	}
