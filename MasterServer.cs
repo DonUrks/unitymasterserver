@@ -11,490 +11,312 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+using System.IO;
+using System.Collections;
+using System.Collections.Generic;
+using System.Net.Sockets;
 
-// <config>
-// listen on
-var port = 8000;		// port for masterserver
-var policyPort = 843;		// port for poilcy server (set 0 to disable)
-var host = "127.0.0.1";		// listen on address
-
-// timeouts in milliseconds 
-var socketTimeout = 15000;	// closes the socket after timeout
-var hostTimeout = 180000;	// remove the host from the database after timespan without any updates
-var hostTimeoutCheck = 10000;	// check intervall for timeout hosts
-
-// database file
-var hostsFile = '';
-// </config>
-
-var net = require('net');
-var nosql = require('nosql').load(hostsFile);
-nosql.description('Hosts database.');
-
-var tokenChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-var currentHostId = -1;
-
-// find highest hostId
-nosql.each(
-	function(doc)
+namespace Urks
+{
+	public class MasterServer : UnityEngine.MonoBehaviour
 	{
-		var docId = parseInt(doc.hostId);
+		public bool dedicatedServer = false;
+		public string ipAddress = "";
+		public int port = 0;
+		public int updateRate = 60;
 		
-		if(currentHostId < docId)
+		private bool hostRegistered = false;
+		
+		private TcpClient socket;
+		private Stream socketStream;
+		
+		private string hostId = "";
+		private string token = "";
+		private string gameName = "";
+		private byte[] data;
+		
+		// actions to server
+		private const byte ACTION_REGISTER_HOST = 1;
+		private const byte ACTION_UNREGISTER_HOST = 2;
+		private const byte ACTION_UPDATE_HOST = 3;
+		private const byte ACTION_REQUEST_HOSTS = 4;
+		
+		// actions to client
+		private const byte ACTION_HOST_REGISTERED = 5;
+		private const byte ACTION_HOSTS = 6;
+		
+		private List<UnityEngine.HostData> hostData = new List<UnityEngine.HostData>();
+
+		private void Start()
 		{
-			currentHostId = docId;
+			this.ipAddress = "127.0.0.1";
+			this.port = 8000;
+
+			UnityEngine.Network.InitializeServer(16, 6000, true);
+			this.RegisterHost("TollesGames", "FFA Join Now!", true);
 		}
-	}
-);
-
-// actions to server
-var ACTION_REGISTER_HOST = 1;
-var ACTION_UNREGISTER_HOST = 2;
-var ACTION_UPDATE_HOST = 3;
-var ACTION_REQUEST_HOSTS = 4;
-
-// actions to client
-var ACTION_HOST_REGISTERED = 5;
-var ACTION_HOSTS = 6;
-
-// masterserver
-var server = net.createServer();
-server.on('connection', onServerConnection);
-server.listen(port, host, onServerListen);
-
-// policyserver
-if(policyPort > 0)
-{
-	net.createServer(
-		function(socket)
+		
+		private void Update()
 		{
-			// todo: configable policy from filesystem
-			socket.write("<?xml version=\"1.0\"?>");
-			socket.write("<cross-domain-policy>");
-			socket.write("<allow-access-from domain=\"*\" />");
-			socket.write("</cross-domain-policy>");
-			socket.end();
-		}
-	).listen(policyPort, host);
-}
-
-function onServerListen()
-{
-	console.log('server started');
-	setInterval(hostsCleanup, hostTimeoutCheck);
-}
-
-function onServerConnection(socket)
-{
-	console.log('connected: ' + socket.remoteAddress + ':' + socket.remotePort);
-	
-	// on socket event error: the original remoteAddress and remotePort are "undefined"
-	socket.remoteAddressCopy = socket.remoteAddress;
-	socket.remotePortCopy = socket.remotePort;
-	
-	socket.setTimeout(socketTimeout, onSocketTimeout);
-	socket.on('end', onSocketEnd);
-	socket.on('error', onSocketError);
-	socket.on('data', onSocketData);
-}
-
-function onSocketTimeout()
-{
-	socketClose(this);
-}
-
-function onSocketEnd()
-{
-	socketClose(this);
-}
-
-function onSocketError()
-{
-	socketClose(this, true);
-}
-
-function socketClose(socket, error)
-{
-	var log = 'disconnected: ' + socket.remoteAddressCopy + ':' + socket.remotePortCopy;
-	if(error)
-	{
-		log += " error (client process terminated?)";
-	}
-
-	console.log(log);
-
-	socket.end();
-	socket.destroy();
-}
-
-function onSocketData(data)
-{
-	console.log('incoming: ' + this.remoteAddress + ':' + this.remotePort);
-	console.log('data length: ' + data.length);
-	console.log('data: ' + data);
-			
-	try
-	{
-		var action = data.readUInt8(0);
-		var actionBody = data.slice(1);
-	}
-	catch(err)
-	{
-		console.log("malformed data: " + err);
-		socketClose(this);
-		return;
-	}
-	
-	switch(action)
-	{
-		case ACTION_REGISTER_HOST:
-			registerHost(this, actionBody);
-			break;
-		case ACTION_UNREGISTER_HOST:
-			unregisterHost(this, actionBody);
-			break;
-		case ACTION_UPDATE_HOST:
-			updateHost(this, actionBody);
-			break;
-		case ACTION_REQUEST_HOSTS:
-			requestHosts(this, actionBody);
-			break;
-		default: 		
-			console.log("unknown action: " + action);
-			socketClose(this);
-			break;
-		
-	}
-}
-
-function registerHost(socket, data)
-{
-	var gameName = "";
-	var port = "";
-	var useNat = false;
-	var playerGUID = "";
-
-	try
-	{
-		var offset = 0;
-	
-		// gameName
-		var gameNameLength = data.readUInt8(offset);				
-		gameName = data.toString("utf8", offset+1, offset+1+gameNameLength);
-		offset += 1 + gameNameLength;
-		
-		// port
-		var portLength = data.readUInt8(offset);
-		port = data.toString("ascii", offset+1, offset+1+portLength);
-		offset += 1 + portLength;
-		
-		// useNat
-		var useNat = data.readUInt8(offset) > 0 ? true : false;
-		offset += 1;
-		
-		// playerGUID
-		var playerGUIDLength = data.readUInt8(offset);		
-		playerGUID = data.toString("ascii", offset+1, offset+1+playerGUIDLength);
-		offset += 1 + playerGUIDLength;
-		
-	}
-	catch(err)
-	{
-		console.log("malformed registerHost: " + err);
-		socketClose(socket);
-		return;
-	}
-
-	var token = "";
-	for(var i=0; i<16; i++)
-	{
-        token += tokenChars.charAt(Math.floor(Math.random() * tokenChars.length));
-	}
-	
-	currentHostId++;
-	var currentId = currentHostId.toString();
-	
-	var id = nosql.insert(
-		{
-			"hostId": currentId,
-			"gameName": gameName, 
-			"token": token,
-			"ready": false,
-			"address": socket.remoteAddressCopy,
-			"port": port,
-			"useNat": useNat,
-			"playerGUID": playerGUID,
-			"timestamp": new Date().getTime()
-		}
-	);
-	
-	console.log("host registered");
-	console.log("hostId: " + currentId);
-	console.log("token: " + token);
-	console.log("gameName: " + gameName);
-	console.log("port: " + port);
-	console.log("useNat: " + useNat);
-	console.log("playerGUID: " + playerGUID);
-	
-	var currentIdLength = Buffer.byteLength(currentId, "ascii");
-	
-	var hostRegistered = new Buffer(currentIdLength+18);	
-	hostRegistered.writeUInt8(ACTION_HOST_REGISTERED, 0);
-	hostRegistered.write(token, "ascii", 1);
-	hostRegistered.writeUInt8(currentIdLength, 17);
-	hostRegistered.write(currentId, 'ascii', 18);
-	
-	socket.write(hostRegistered);
-}
-
-function unregisterHost(socket, data)
-{
-	var hostId = "";
-	var token = "";
-	
-	try
-	{
-		var offset = 0;
-					
-		var hostIdLength = data.readUInt8(offset);
-		offset += 1;
-		
-		hostId = data.toString('ascii', offset, offset+hostIdLength);
-		offset += hostIdLength;
-		
-		token = data.toString('ascii', offset, offset+16);
-		offset += 16;
-	}
-	catch(err)
-	{
-		console.log("malformed unregisterHost: " + err);
-		socketClose(socket);
-		return;
-	}
-	
-	nosql.remove(
-		function(doc) 
-		{
-			return doc.hostId == hostId && doc.token == token;
-		},
-		function(count) 
-		{		
-			if(count)
+			if (null != this.socket && this.socket.Connected)
 			{
-				console.log("host unregistered");
-				console.log("hostId: " + hostId);
-				console.log("token: " + token);
-			}
-			else
-			{
-				console.log("host not found");
-				console.log("hostId: " + hostId);
-				console.log("token: " + token);
-				socketClose(socket);
-			}
-		}
-	);	
-}
-
-function updateHost(socket, data)
-{
-	var hostId = "";
-	var token = "";
-	var name = "";
-	var passwordRequired = 0;
-	var playerCount = 0;
-	var playerLimit = 0;
-	var customData;
-	
-	try
-	{
-		var offset = 0;
+				if (0 < this.socket.Available)
+				{					
+					byte action = (byte)this.socketStream.ReadByte();
 					
-		var hostIdLength = data.readUInt8(offset);
-		offset += 1;
-		
-		hostId = data.toString('ascii', offset, offset+hostIdLength);
-		offset += hostIdLength;
-		
-		token = data.toString('ascii', offset, offset+16);
-		offset += 16;
-		
-		var nameLength = data.readUInt8(offset);
-		offset += 1;
-		
-		name = data.toString('utf8', offset, offset+nameLength);
-		offset += nameLength;
-		
-		passwordRequired = data.readUInt8(offset);
-		offset += 1;
-		
-		playerCount = data.readUInt8(offset);
-		offset += 1;
-		
-		playerLimit = data.readUInt8(offset);
-		offset += 1;
-		
-		var customDataLength = data.readUInt8(offset);
-		offset += 1;
-		
-		customData = data.slice(offset, offset+customDataLength);
-	}
-	catch(err)
-	{
-		console.log("malformed updateHost: " + err);
-		socketClose(socket);
-		return;
-	}
-		
-	nosql.update(
-		function(doc) 
-		{
-			if (doc.hostId == hostId && doc.token == token)
-			{
-				doc.ready = true;
-				doc.name = name;
-				doc.passwordRequired = passwordRequired;
-				doc.playerCount = playerCount;
-				doc.playerLimit = playerLimit;
-				doc.customData = customData;
-				doc.timestamp = new Date().getTime();
-			}			
-			return doc;
-		},
-		function(count) 
-		{
-			if(count)
-			{
-				console.log("host updated");
-				console.log("hostId: " + hostId);
-				console.log("token: " + token);
-				console.log("name: " + name);
-				console.log("passwordRequired: " + passwordRequired);
-				console.log("playerCount: " + playerCount);
-				console.log("playerLimit: " + playerLimit);
-				console.log("customData: " + customData);
-			}
-			else
-			{
-				console.log("host not found");
-				console.log("hostId: " + hostId);
-				console.log("token: " + token);
-				console.log("name: " + name);
-				socketClose(socket);
-			}
-		}
-	);
-}
-
-function requestHosts(socket, data)
-{
-	var gameName = "";
-	
-	try
-	{
-		var gameNameLength = data.readUInt8(0);
-		gameName = data.toString("utf8", 1, 1+gameNameLength);
-	}
-	catch(err)
-	{
-		console.log("malformed requestHosts: " + err);
-		socketClose(socket);
-		return;
-	}
-	
-	console.log("request hosts '" + gameName + "'");
-	
-	nosql.all(
-		function(doc) 
-		{
-			if (doc.gameName == gameName && doc.ready == true)
-			{
-				return doc;
-			}
-		}, 
-		function(selected)
-		{		
-			var outputBuffer = new Buffer(2);
-			outputBuffer.writeUInt8(ACTION_HOSTS, 0);
-			outputBuffer.writeUInt8(selected.length, 1);
-			selected.forEach(
-				function(doc) 
-				{				
-					var offset = 0;
-				
-					var bufferSize = 1 + doc.address.length;	// addressLength + address
-					bufferSize += 1 + doc.port.length;	// portLength + port
-					bufferSize += 1 + Buffer.byteLength(doc.name, "utf8");	// nameLength + name
-					bufferSize += 1;	// passwordRequired
-					bufferSize += 1;	// playerCount
-					bufferSize += 1;	// playerLimit
-					bufferSize += 1;	// useNat
-					bufferSize += 1 + Buffer.byteLength(doc.playerGUID, "ascii");	// playerGUIDLength + playerGUID
-					
-					var documentBuffer = new Buffer(bufferSize);
-					
-					// address
-					documentBuffer.writeUInt8(doc.address.length, offset);
-					offset += 1;
-					documentBuffer.write(doc.address, "ascii", offset);
-					offset += doc.address.length;
-					
-					// port
-					documentBuffer.writeUInt8(doc.port.length, offset);
-					offset += 1;
-					documentBuffer.write(doc.port, "ascii", offset);
-					offset += doc.port.length;
-					
-					// name
-					documentBuffer.writeUInt8(Buffer.byteLength(doc.name, "utf8"), offset);
-					offset += 1;
-					documentBuffer.write(doc.name, "utf8", offset);
-					offset += Buffer.byteLength(doc.name, "utf8");
-					
-					// passwordRequired
-					documentBuffer.writeUInt8(doc.passwordRequired, offset);
-					offset += 1;
-					
-					// playerCount
-					documentBuffer.writeUInt8(doc.playerCount, offset);
-					offset += 1;
-					
-					// playerLimit
-					documentBuffer.writeUInt8(doc.playerLimit, offset);
-					offset += 1;
-					
-					// useNat
-					documentBuffer.writeUInt8(doc.useNat, offset);
-					offset += 1;
-					
-					// playerGUID
-					documentBuffer.writeUInt8(doc.playerGUID.length, offset);
-					offset += 1;
-					documentBuffer.write(doc.playerGUID, "ascii", offset);
-					offset += doc.playerGUID.length;
-									
-					outputBuffer += documentBuffer;
+					switch(action)
+					{
+					case ACTION_HOST_REGISTERED:
+						// token
+						byte[] tokenBytes = new byte[16];
+						this.socketStream.Read(tokenBytes, 0, tokenBytes.Length);
+						
+						// hostId
+						byte hostIdLength = (byte)this.socketStream.ReadByte();
+						byte[] hostIdBytes = new byte[hostIdLength];
+						this.socketStream.Read(hostIdBytes, 0, hostIdLength);
+						
+						this.token = System.Text.Encoding.ASCII.GetString(tokenBytes);
+						this.hostId = System.Text.Encoding.ASCII.GetString(hostIdBytes);
+						
+						this.hostRegistered = true;
+						StartCoroutine("UpdateHostData");
+						
+						UnityEngine.Debug.Log("Host registered on master server. (hostId: " + this.hostId + ")");
+						break;
+						
+					case ACTION_HOSTS:
+						// host count
+						byte hostCount = (byte)this.socketStream.ReadByte();
+						
+						UnityEngine.Debug.Log("Hosts: " + hostCount);
+						
+						for(int i = 0; i < hostCount; i++)
+						{
+							// address
+							byte addressLength = (byte)this.socketStream.ReadByte();
+							byte[] adressBytes = new byte[addressLength];
+							this.socketStream.Read(adressBytes, 0, addressLength);
+							
+							// port
+							byte portLength = (byte)this.socketStream.ReadByte();
+							byte[] portBytes = new byte[portLength];
+							this.socketStream.Read(portBytes, 0, portLength);
+							
+							// name
+							byte nameLength = (byte)this.socketStream.ReadByte();
+							byte[] nameBytes = new byte[nameLength];
+							this.socketStream.Read(nameBytes, 0, nameLength);
+							
+							// passwordRequired
+							byte passwordRequired = (byte)this.socketStream.ReadByte();
+							
+							// playerCount
+							byte playerCount = (byte)this.socketStream.ReadByte();
+							
+							// playerLimit
+							byte playerLimit = (byte)this.socketStream.ReadByte();
+							
+							// useNat
+							byte useNat = (byte)this.socketStream.ReadByte();
+							
+							// playerGUID
+							byte playerGUIDLength = (byte)this.socketStream.ReadByte();
+							byte[] playerGUIDBytes = new byte[playerGUIDLength];
+							this.socketStream.Read(playerGUIDBytes, 0, playerGUIDLength);
+							
+							UnityEngine.HostData hostData = new UnityEngine.HostData();
+							hostData.ip = new string[1];
+							hostData.ip[0] = System.Text.ASCIIEncoding.ASCII.GetString(adressBytes);
+							hostData.port = int.Parse(System.Text.ASCIIEncoding.ASCII.GetString(portBytes));
+							hostData.gameName = System.Text.UTF8Encoding.UTF8.GetString(nameBytes);
+							hostData.passwordProtected = passwordRequired > 0 ? true : false;
+							hostData.connectedPlayers = playerCount;
+							hostData.playerLimit = playerLimit;
+							hostData.useNat = useNat > 0 ? true : false;
+							hostData.guid = System.Text.ASCIIEncoding.ASCII.GetString(playerGUIDBytes);
+							
+							this.hostData.Add(hostData);
+						}
+						
+						break;
+					default:
+						UnityEngine.Debug.Log("Unknown action from MasterServer: " + action);
+						this.socketStream.Close();
+						break;
+					}
 				}
-			);
-			
-			socket.write(outputBuffer);
-		}
-	);
-}
-
-function hostsCleanup()
-{
-	var timeoutTimestamp = new Date().getTime() - hostTimeout;
-	
-	nosql.remove(
-		function(doc) 
-		{
-			if(doc.timestamp <= timeoutTimestamp)
-			{
-				console.log("host timeout: " + doc.hostId);
-				return true;
 			}
-			return false;
 		}
-	);	
+		
+		public void RegisterHost(string gameTypeName, string gameName, bool useNat, byte[] data)
+		{
+			this.data = data;
+			this.RegisterHost(gameTypeName, gameName, useNat);
+		}
+		
+		public void RegisterHost(string gameTypeName, string gameName, bool useNat)
+		{
+			if (!UnityEngine.Network.isServer)
+			{
+				throw new UnityEngine.UnityException("It's not possible to register a host until it is running.");
+			}
+			
+			this.gameName = gameName;
+			
+			byte[] gameTypeNameBytes = System.Text.UTF8Encoding.UTF8.GetBytes(gameTypeName);
+			if (gameTypeNameBytes.Length <= 0 || gameTypeNameBytes.Length > 255)
+			{
+				throw new UnityEngine.UnityException("You must pass a GameTypeName 1-255 bytes.");
+			}
+			
+			byte[] portBytes = System.Text.ASCIIEncoding.ASCII.GetBytes(UnityEngine.Network.player.port.ToString());
+			byte[] playerGUIDBytes = System.Text.ASCIIEncoding.ASCII.GetBytes(UnityEngine.Network.player.guid);
+			
+			List<byte> bytes = new List<byte>();
+			
+			// action
+			bytes.Add(ACTION_REGISTER_HOST);
+			
+			// gameTypeName
+			bytes.Add((byte)gameTypeNameBytes.Length);
+			bytes.AddRange(gameTypeNameBytes);
+			
+			// port
+			bytes.Add((byte)portBytes.Length);
+			bytes.AddRange(portBytes);
+			
+			// useNat
+			bytes.Add((byte)(useNat == true ? 1 : 0));
+			
+			// player GUID
+			bytes.Add((byte)playerGUIDBytes.Length);
+			bytes.AddRange(playerGUIDBytes);
+			
+			this.RequireConnection();
+			this.socketStream.Write(bytes.ToArray(), 0, bytes.Count);
+		}
+		
+		public void ClearHostList()
+		{
+			this.hostData.Clear();
+		}
+		
+		public UnityEngine.HostData[] PollHostList()
+		{
+			return this.hostData.ToArray();
+		}
+		
+		public void RequestHostList(string gameTypeName)
+		{
+			byte[] gameTypeNameBytes = System.Text.UTF8Encoding.UTF8.GetBytes(gameTypeName);
+			
+			List<byte> bytes = new List<byte>();
+			
+			// action
+			bytes.Add(ACTION_REQUEST_HOSTS);
+			
+			// gameTypeName
+			bytes.Add((byte)gameTypeNameBytes.Length);
+			bytes.AddRange(gameTypeNameBytes);
+			
+			this.RequireConnection();
+			this.socketStream.Write(bytes.ToArray(), 0, bytes.Count);
+		}
+		
+		public void UnregisterHost()
+		{
+			if (this.hostRegistered)
+			{
+				StopCoroutine("UpdateHostData");
+				
+				byte[] hostIdBytes = System.Text.ASCIIEncoding.ASCII.GetBytes(this.hostId);
+				byte[] tokenBytes = System.Text.ASCIIEncoding.ASCII.GetBytes(this.token);
+				
+				List<byte> bytes = new List<byte>();
+				
+				// action
+				bytes.Add(ACTION_UNREGISTER_HOST);
+				
+				// hostId
+				bytes.Add((byte)hostIdBytes.Length);
+				bytes.AddRange(hostIdBytes);
+				
+				// token
+				bytes.AddRange(tokenBytes);
+				
+				this.RequireConnection();
+				this.socketStream.Write(bytes.ToArray(), 0, bytes.Count);
+			}
+		}
+		
+		private void RequireConnection()
+		{
+			if (null == this.socket || !this.socket.Connected)
+			{
+				this.socket = new TcpClient(this.ipAddress, this.port);
+				this.socket.NoDelay = true;
+			}
+			this.socketStream = this.socket.GetStream();
+		}
+		
+		private IEnumerator UpdateHostData()
+		{
+			byte[] hostIdBytes = System.Text.ASCIIEncoding.ASCII.GetBytes(this.hostId);
+			byte[] tokenBytes = System.Text.ASCIIEncoding.ASCII.GetBytes(this.token);
+			byte[] gameNameBytes = System.Text.UTF8Encoding.UTF8.GetBytes(this.gameName);
+			
+			while (true)
+			{
+				byte passwordRequired = UnityEngine.Network.incomingPassword != "" ? (byte)1 : (byte)0;
+				byte playerCount = (byte)UnityEngine.Network.connections.Length;
+				if(!this.dedicatedServer)
+				{
+					playerCount += 1;
+				}
+				byte playerLimit = (byte)UnityEngine.Network.maxConnections;
+				
+				List<byte> bytes = new List<byte>();
+				
+				// action
+				bytes.Add(ACTION_UPDATE_HOST);
+				
+				// hostId
+				bytes.Add((byte)hostIdBytes.Length);
+				bytes.AddRange(hostIdBytes);
+				
+				// token
+				bytes.AddRange(tokenBytes);
+				
+				// gameName
+				bytes.Add((byte)gameNameBytes.Length);
+				bytes.AddRange(gameNameBytes);
+				
+				// passwordRequired
+				bytes.Add(passwordRequired);
+				
+				// playerCount
+				bytes.Add(playerCount);
+				
+				// playerLimit
+				bytes.Add(playerLimit);
+				
+				// data
+				if (this.data != null)
+				{
+					bytes.Add((byte)this.data.Length);
+					bytes.AddRange(this.data);
+				}
+				else
+				{
+					bytes.Add(0);
+				}
+				
+				this.RequireConnection();
+				this.socketStream.Write(bytes.ToArray(), 0, bytes.Count);
+				
+				yield return new UnityEngine.WaitForSeconds(this.updateRate);
+			}
+		}
+	}
 }
