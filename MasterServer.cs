@@ -47,15 +47,6 @@ namespace Urks
 		
 		private List<UnityEngine.HostData> hostData = new List<UnityEngine.HostData>();
 
-		private void Start()
-		{
-			this.ipAddress = "127.0.0.1";
-			this.port = 8000;
-
-			UnityEngine.Network.InitializeServer(16, 6000, true);
-			this.RegisterHost("TollesGames", "FFA Join Now!", true);
-		}
-		
 		private void Update()
 		{
 			if (null != this.socket && this.socket.Connected)
