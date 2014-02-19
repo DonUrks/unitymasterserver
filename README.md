@@ -34,7 +34,7 @@ This program is an alternative to the Unity MasterServer functionality. It inclu
 3. Configure the script in the inspector (especially host and port)
 4. Tag the GameObject (for example: "Urks.MasterServer")
 5. Obtain in your script the "Urks.MasterServer" object and gain access to the script component
-6. Now you can use all methods similiar to the build in masterserver
+6. Now you can use all methods similiar to the built-in masterserver
 
 ##### Example Usage
 ```javascript
