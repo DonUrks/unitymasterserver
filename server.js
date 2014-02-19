@@ -32,7 +32,20 @@ var nosql = require('nosql').load(hostsFile);
 nosql.description('Hosts database.');
 
 var tokenChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-var currentHostId = 0;
+var currentHostId = -1;
+
+// find highest hostId
+nosql.each(
+	function(doc)
+	{
+		var docId = parseInt(doc.hostId);
+		
+		if(currentHostId < docId)
+		{
+			currentHostId = docId;
+		}
+	}
+);
 
 // actions to server
 var ACTION_REGISTER_HOST = 1;
@@ -119,8 +132,6 @@ function onSocketData(data)
 	console.log('incoming: ' + this.remoteAddress + ':' + this.remotePort);
 	console.log('data length: ' + data.length);
 	console.log('data: ' + data);
-	socketClose(this);
-	return;
 			
 	try
 	{
@@ -200,8 +211,8 @@ function registerHost(socket, data)
         token += tokenChars.charAt(Math.floor(Math.random() * tokenChars.length));
 	}
 	
-	var currentId = currentHostId.toString();
 	currentHostId++;
+	var currentId = currentHostId.toString();
 	
 	var id = nosql.insert(
 		{
@@ -228,7 +239,7 @@ function registerHost(socket, data)
 	var currentIdLength = Buffer.byteLength(currentId, "ascii");
 	
 	var hostRegistered = new Buffer(currentIdLength+18);	
-	hostRegistered.write(ACTION_HOST_REGISTERED, "ascii", 0);
+	hostRegistered.writeUInt8(ACTION_HOST_REGISTERED, 0);
 	hostRegistered.write(token, "ascii", 1);
 	hostRegistered.writeUInt8(currentIdLength, 17);
 	hostRegistered.write(currentId, 'ascii', 18);
@@ -391,6 +402,8 @@ function requestHosts(socket, data)
 		return;
 	}
 	
+	console.log("request hosts '" + gameName + "'");
+	
 	nosql.all(
 		function(doc) 
 		{
@@ -402,11 +415,8 @@ function requestHosts(socket, data)
 		function(selected)
 		{		
 			var outputBuffer = new Buffer(2);
-			outputBuffer.write(ACTION_HOSTS, "ascii", 0);
+			outputBuffer.writeUInt8(ACTION_HOSTS, 0);
 			outputBuffer.writeUInt8(selected.length, 1);
-			
-			var documentBuffers = [];
-			
 			selected.forEach(
 				function(doc) 
 				{				
@@ -418,6 +428,8 @@ function requestHosts(socket, data)
 					bufferSize += 1;	// passwordRequired
 					bufferSize += 1;	// playerCount
 					bufferSize += 1;	// playerLimit
+					bufferSize += 1;	// useNat
+					bufferSize += 1 + Buffer.byteLength(doc.playerGUID, "ascii");	// playerGUIDLength + playerGUID
 					
 					var documentBuffer = new Buffer(bufferSize);
 					
@@ -450,7 +462,17 @@ function requestHosts(socket, data)
 					// playerLimit
 					documentBuffer.writeUInt8(doc.playerLimit, offset);
 					offset += 1;
-										
+					
+					// useNat
+					documentBuffer.writeUInt8(doc.useNat, offset);
+					offset += 1;
+					
+					// playerGUID
+					documentBuffer.writeUInt8(doc.playerGUID.length, offset);
+					offset += 1;
+					documentBuffer.write(doc.playerGUID, "ascii", offset);
+					offset += doc.playerGUID.length;
+									
 					outputBuffer += documentBuffer;
 				}
 			);
