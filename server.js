@@ -69,10 +69,7 @@ if(policyPort > 0)
 		function(socket)
 		{
 			// todo: configable policy from filesystem
-			socket.write("<?xml version=\"1.0\"?>");
-			socket.write("<cross-domain-policy>");
-			socket.write("<allow-access-from domain=\"*\" />");
-			socket.write("</cross-domain-policy>");
+			socket.write("<?xml version=\"1.0\"?><cross-domain-policy><allow-access-from domain=\"*\" /></cross-domain-policy>");
 			socket.end();
 		}
 	).listen(policyPort, host);
